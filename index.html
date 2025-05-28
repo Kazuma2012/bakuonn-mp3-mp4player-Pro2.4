@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>爆音MP3/MP4プレイヤー Pro 2.4</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      background-color: #fffaf2;
+      padding: 20px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      background: #000;
+      margin-top: 20px;
+      width: 100%;
+      height: auto;
+      max-width: 600px;
+    }
+    input[type="range"] {
+      width: 80%;
+      max-width: 400px;
+    }
+    audio {
+      width: 100%;
+      max-width: 600px;
+    }
+    button {
+      background-color: #ff3366;
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-bottom: 10px;
+    }
+    button:hover {
+      background-color: #cc0044;
+    }
+    @media (max-width: 600px) {
+      body {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <h1>爆音MP3/MP4プレイヤー Pro 2.4</h1>
+
+  <input type="file" id="fileInput" accept="audio/mpeg,video/mp4"><br><br>
+  <audio id="audio" controls></audio><br><br>
+
+  <label for="volumeSlider">爆音レベル：</label>
+  <input type="range" id="volumeSlider" min="1" max="500" step="0.5" value="1">
+  <span id="volumeValue">1.0</span>x<br><br>
+
+  <label for="bassBoostSlider">低音ブースト：</label>
+  <input type="range" id="bassBoostSlider" min="-30" max="30" value="0">
+  <span id="bassBoostValue">0</span>dB<br><br>
+
+  <label for="trebleBoostSlider">高音ブースト：</label>
+  <input type="range" id="trebleBoostSlider" min="-30" max="30" value="0">
+  <span id="trebleBoostValue">0</span>dB<br><br>
+
+  <button id="resetEQ">低音・高音リセット 🔄</button><br><br>
+
+  <div id="compressorStatus">補正機能：ON ✅</div>
+  <button id="toggleCompressor">補正をOFFにする</button><br>
+
+  <label for="compressorSlider">補正強さ：</label>
+  <input type="range" id="compressorSlider" min="0" max="100" value="50">
+  <span id="compressorValue">50</span>%<br><br>
+
+  <canvas id="visualCanvas" width="600" height="200"></canvas>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const audio = document.getElementById('audio');
+    const volumeSlider = document.getElementById('volumeSlider');
+    const volumeValue = document.getElementById('volumeValue');
+    const toggleBtn = document.getElementById('toggleCompressor');
+    const compressorStatus = document.getElementById('compressorStatus');
+    const compressorSlider = document.getElementById('compressorSlider');
+    const compressorValue = document.getElementById('compressorValue');
+    const bassBoostSlider = document.getElementById('bassBoostSlider');
+    const bassBoostValue = document.getElementById('bassBoostValue');
+    const trebleBoostSlider = document.getElementById('trebleBoostSlider');
+    const trebleBoostValue = document.getElementById('trebleBoostValue');
+    const resetEQButton = document.getElementById('resetEQ');
+
+    const canvas = document.getElementById('visualCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let audioContext, source, gainNode, compressor, analyser, lowShelfFilter, highShelfFilter;
+    let compressorEnabled = true;
+
+    volumeSlider.addEventListener('input', () => {
+      const vol = parseFloat(volumeSlider.value);
+      volumeValue.textContent = vol.toFixed(1);
+      if (gainNode) gainNode.gain.value = vol;
+    });
+
+    bassBoostSlider.addEventListener('input', () => {
+      const val = parseFloat(bassBoostSlider.value);
+      bassBoostValue.textContent = val;
+      if (lowShelfFilter) lowShelfFilter.gain.setValueAtTime(val, audioContext.currentTime);
+    });
+
+    trebleBoostSlider.addEventListener('input', () => {
+      const val = parseFloat(trebleBoostSlider.value);
+      trebleBoostValue.textContent = val;
+      if (highShelfFilter) highShelfFilter.gain.setValueAtTime(val, audioContext.currentTime);
+    });
+
+    resetEQButton.addEventListener('click', () => {
+      bassBoostSlider.value = 0;
+      bassBoostValue.textContent = "0";
+      trebleBoostSlider.value = 0;
+      trebleBoostValue.textContent = "0";
+      if (lowShelfFilter && highShelfFilter) {
+        const t = audioContext.currentTime;
+        lowShelfFilter.gain.setValueAtTime(0, t);
+        highShelfFilter.gain.setValueAtTime(0, t);
+      }
+    });
+
+    toggleBtn.addEventListener('click', () => {
+      compressorEnabled = !compressorEnabled;
+      compressorStatus.textContent = `補正機能：${compressorEnabled ? 'ON ✅' : 'OFF ❌'}`;
+      toggleBtn.textContent = `補正を${compressorEnabled ? 'OFF' : 'ON'}にする`;
+      if (source) connectNodes();
+    });
+
+    compressorSlider.addEventListener('input', () => {
+      const strength = parseInt(compressorSlider.value);
+      compressorValue.textContent = strength;
+      if (compressor) applyCompressorStrength(strength);
+    });
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      audio.src = URL.createObjectURL(file);
+      if (audioContext) audioContext.close();
+
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      source = audioContext.createMediaElementSource(audio);
+      gainNode = audioContext.createGain();
+      compressor = audioContext.createDynamicsCompressor();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+
+      lowShelfFilter = audioContext.createBiquadFilter();
+      lowShelfFilter.type = 'lowshelf';
+      lowShelfFilter.frequency.setValueAtTime(200, audioContext.currentTime);
+      lowShelfFilter.gain.setValueAtTime(parseFloat(bassBoostSlider.value), audioContext.currentTime);
+
+      highShelfFilter = audioContext.createBiquadFilter();
+      highShelfFilter.type = 'highshelf';
+      highShelfFilter.frequency.setValueAtTime(3000, audioContext.currentTime);
+      highShelfFilter.gain.setValueAtTime(parseFloat(trebleBoostSlider.value), audioContext.currentTime);
+
+      gainNode.gain.value = parseFloat(volumeSlider.value);
+      applyCompressorStrength(parseInt(compressorSlider.value));
+      connectNodes();
+      drawVisual();
+    });
+
+    function connectNodes() {
+      source.disconnect();
+      gainNode.disconnect();
+      compressor.disconnect();
+      analyser.disconnect();
+      lowShelfFilter.disconnect();
+      highShelfFilter.disconnect();
+
+      if (compressorEnabled) {
+        source.connect(gainNode).connect(lowShelfFilter).connect(highShelfFilter).connect(compressor).connect(analyser).connect(audioContext.destination);
+      } else {
+        source.connect(gainNode).connect(lowShelfFilter).connect(highShelfFilter).connect(analyser).connect(audioContext.destination);
+      }
+    }
+
+    function applyCompressorStrength(strength) {
+      const t = audioContext.currentTime;
+      compressor.threshold.setValueAtTime(-40 * (strength / 100), t);
+      compressor.knee.setValueAtTime(40 - 40 * (strength / 100), t);
+      compressor.ratio.setValueAtTime(1 + 19 * (strength / 100), t);
+      compressor.attack.setValueAtTime(0.05 - 0.049 * (strength / 100), t);
+      compressor.release.setValueAtTime(0.05 + 0.45 * (strength / 100), t);
+    }
+
+    function drawVisual() {
+      const waveData = new Uint8Array(analyser.fftSize);
+      const freqData = new Uint8Array(analyser.frequencyBinCount);
+      function draw() {
+        requestAnimationFrame(draw);
+        analyser.getByteTimeDomainData(waveData);
+        analyser.getByteFrequencyData(freqData);
+
+        ctx.fillStyle = "rgba(0, 0, 0, 0.1)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 波形描画
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(0,255,153,0.6)";
+        ctx.beginPath();
+        const sliceWidth = canvas.width / waveData.length;
+        let x = 0;
+        for (let i = 0; i < waveData.length; i++) {
+          const v = waveData[i] / 128.0;
+          const y = (v * canvas.height) / 2;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+          x += sliceWidth;
+        }
+        ctx.stroke();
+
+        // スペクトラム描画
+        const barWidth = (canvas.width / freqData.length) * 2.5;
+        x = 0;
+        for (let i = 0; i < freqData.length; i++) {
+          const barHeight = freqData[i] / 2;
+          ctx.fillStyle = `rgba(${barHeight + 100}, 50, 200, 0.5)`;
+          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+          x += barWidth + 1;
+        }
+      }
+      draw();
+    }
+  </script>
+</body>
+</html>
